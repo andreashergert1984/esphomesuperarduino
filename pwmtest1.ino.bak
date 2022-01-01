@@ -1,0 +1,541 @@
+#include <avr/interrupt.h>
+#include <avr/io.h>
+#include <util/delay.h>
+#include <Wire.h>
+#include <EEPROM.h>
+
+/*
+
+i2c Configuration: 
+
+Possible Configuration: 
+Sending to Slave: 
+Modifing all Configuration registers at once: Address(write),0x00,6-bytes(4 PWM Config; 2 RPM Config)
+
+PWM Output:
+  Timer1 Address: 0x01
+  Timer3 Address: 0x02
+  Timer4 Address: 0x03
+  Timer5 Address: 0x04
+
+  Timer Bytes: 
+  0: Enabled
+  1: 50Hz Output Enabled (prio)
+  2: 25kHz Output Enabled
+  3: Port A Enabled
+  4: Port B Enabled
+  5: Port C Enabled
+  6: not used
+  7: not used
+
+PWM Output Speed write to(0-255)  
+  Timer1Port0 Address: 0x10
+  Timer1Port1 Address: 0x11
+  Timer1Port2 Address: 0x12
+  Timer3Port0 Address: 0x13
+  Timer3Port1 Address: 0x14
+  Timer3Port2 Address: 0x15
+  Timer4Port0 Address: 0x16
+  Timer4Port1 Address: 0x17
+  Timer4Port2 Address: 0x18
+  Timer5Port0 Address: 0x19
+  Timer5Port1 Address: 0x1a
+  Timer5Port2 Address: 0x1b
+  
+RPM Output Speed write to(0-65535) (2 Bytes) MSB-first
+  Timer1Port0 Address: 0x20
+  Timer1Port1 Address: 0x21
+  Timer1Port2 Address: 0x22
+  Timer3Port0 Address: 0x23
+  Timer3Port1 Address: 0x24
+  Timer3Port2 Address: 0x25
+  Timer4Port0 Address: 0x26
+  Timer4Port1 Address: 0x27
+  Timer4Port2 Address: 0x28
+  Timer5Port0 Address: 0x29
+  Timer5Port1 Address: 0x2a
+  Timer5Port2 Address: 0x2b
+
+
+RPM Input:
+  RPMin0 Address: 0x30 (2 Bytes) MSB-first
+  RPMin Bytes:
+  Byte0 Bit 0: Port 0 Enable
+  Byte0 Bit 1: Port 1 Enable
+  Byte0 Bit 2: Port 2 Enable
+  Byte0 Bit 3: Port 3 Enable
+  Byte0 Bit 4: Port 4 Enable
+  Byte0 Bit 5: Port 5 Enable
+  Byte0 Bit 6: Port 6 Enable
+  Byte0 Bit 7: Port 7 Enable
+
+  Byte1 Bit 0: Port 8 Enable
+  Byte1 Bit 1: Port 9 Enable
+  Byte1 Bit 2: Port 10 Enable
+  Byte1 Bit 3: Port 11 Enable
+  Byte1 Bit 4: not used
+  Byte1 Bit 5: not used
+  Byte1 Bit 6: not used
+  Byte1 Bit 7: not used
+*/
+
+uint16_t timer2counter;  //RPM sampling divider
+uint16_t pccounter[12]; 
+uint8_t pcintstate[3];  //save the last state to determine which input was changed
+uint8_t req_register;      //requested Byte
+volatile uint16_t fanrpm[12]; // the calculated result
+uint8_t timerspeed25khz[4]; //saving the activated speed (1 -> 25kHz; 0 -> 50Hz)
+uint8_t samplingtime = 5;  //sampling time for RPM
+
+void pcIntBegin() {
+  PCICR |= (1 << PCIE0) | (1 << PCIE1) | (1 << PCIE2);
+
+  // PCINT0
+  // DDRB &= (0 << PORTB0) | (0 << PORTB1) | (0 << PORTB2) | (0 << PORTB3);
+  DDRB &= 0xF0;
+  PORTB |= (1 << PORTB0) | (1 << PORTB1) | (1 << PORTB2) | (1 << PORTB3);
+  PCMSK0 = (1 << PCINT0) | (1 << PCINT1) | (1 << PCINT2) | (1 << PCINT3);
+
+  // PCINT1
+  // DDRJ &= (0 << PORTJ0) | (0 << PORTJ1);
+  DDRJ &= 0xfc;
+  PORTJ |= (1 << PORTJ0) | (1 << PORTJ1);
+  // DDRK &= (0 << PORTK2) | (0 << PORTK3);
+  DDRK &= 0xf3;
+  PORTK |= (1 << PORTK2) | (1 << PORTK3);
+  PCMSK1 = (1 << PCINT9) | (1 << PCINT10) | (1 << PCINT18) | (1 << PCINT19);
+
+  // PCINT2
+  // DDRK &= (0 << PORTK4) | (0 << PORTK5) | (0 << PORTK6) | (0 << PORTK7);
+  DDRK &= 0x0F;
+  DDRK = 0;
+  PORTK |= (1 << PORTK4) | (1 << PORTK5) | (1 << PORTK6) | (1 << PORTK7);
+  PCMSK2 = (1 << PCINT20) | (1 << PCINT21) | (1 << PCINT22) | (1 << PCINT23);
+
+  sei();
+}
+
+ISR(PCINT0_vect) {
+  pccounter[0] += (pcintstate[0] & 0x01) != (PINB & 0x01);
+  pccounter[1] += (pcintstate[0] & 0x02) != (PINB & 0x02);
+  pccounter[2] += (pcintstate[0] & 0x04) != (PINB & 0x04);
+  pccounter[3] += (pcintstate[0] & 0x08) != (PINB & 0x08);
+  pcintstate[0] = (PINB & 0x0F); // lowest 4 bytes of PORTB;
+}
+
+ISR(PCINT1_vect) {
+  // DDRJ &= (0 << PORTJ0) | (0 << PORTJ1);
+  // DDRK &= (0 << PORTK2) | (0 << PORTK3);
+  pccounter[4] += (pcintstate[1] & 0x01) != (PINJ & 0x01);
+  pccounter[5] += (pcintstate[1] & 0x02) != (PINJ & 0x02);
+  pccounter[6] += (pcintstate[1] & 0x04) != (PINK & 0x04);
+  pccounter[7] += (pcintstate[1] & 0x08) != (PINK & 0x08);
+  pcintstate[1] = (PINJ & 0x03) | (PINK & 0x0c);
+}
+
+ISR(PCINT2_vect) {
+  // DDRK &= (0 << PORTK4) | (0 << PORTK5) | (0 << PORTK6) | (0 << PORTK7);
+  pccounter[8] += (pcintstate[2] & 0x10) != (PINK & 0x10);
+  pccounter[9] += (pcintstate[2] & 0x20) != (PINK & 0x20);
+  pccounter[10] += (pcintstate[2] & 0x40) != (PINK & 0x40);
+  pccounter[11] += (pcintstate[2] & 0x80) != (PINK & 0x80);
+  pcintstate[2] = (PINK & 0xf0);
+}
+
+void RPMBegin() {
+  timer2counter = 0;
+  TIMSK2 = (1 << TOIE2); // enable overflow interrupt
+  TIFR2 = 0;  // clear overflow flag
+  TCNT2 = 0;
+  TCCR2A = 0;
+  TCCR2B = _BV(CS20) | _BV(CS21) | _BV(CS22);
+  sei();  // enable interrupts
+
+}
+
+ISR(TIMER2_OVF_vect) {
+  timer2counter++;
+  //16.000.000Hz / 1024(prescale) / 256(byte) = 61,03515625 Hz/s
+  if (timer2counter >= samplingtime*61) {
+    float secs = samplingtime;  //seconds of sampling
+    for (uint8_t c = 0; c < 12 ;c++) 
+    {
+      fanrpm[c] = (uint16_t)((pccounter[c]*15.0f) / secs);
+      pccounter[c] = 0;
+    }
+    timer2counter = 0;  
+  }
+}
+
+void receiveEvent(int howMany)
+{
+
+  if (howMany == 0) {
+    Serial.println("just a ping");
+    return; // just a ping
+  }
+  req_register = Wire.read();
+  byte config;
+  byte data0;
+  Serial.print("wreg ");
+  Serial.print(req_register,HEX);
+  // checking for correct length
+  if ((req_register > 0x00 && req_register <= 0x04) || (req_register >= 0x10 && req_register <= 0x1b)) {
+    if (Wire.available()){
+      data0 = Wire.read();
+      Serial.print("d ");
+      Serial.println(data0,HEX);
+    } else {
+      return;
+    }
+  }
+  switch (req_register) {
+    case 0x01:  setupPWM1(data0);
+                EEPROM.update(0x01,data0);
+                EEPROM.update(0x00,0);
+                break;
+    case 0x02:  setupPWM3(data0);
+                EEPROM.update(0x02,data0);
+                EEPROM.update(0x00,0);
+                break;
+    case 0x03:  setupPWM4(data0);
+                EEPROM.update(0x03,data0);
+                EEPROM.update(0x00,0);
+                break;
+    case 0x04:  setupPWM5(data0);
+                EEPROM.update(0x04,data0);
+                EEPROM.update(0x00,0);
+                break;
+    case 0x10:
+    case 0x11:
+    case 0x12:
+    case 0x13:
+    case 0x14:
+    case 0x15:
+    case 0x16:
+    case 0x17:
+    case 0x18:
+    case 0x19:
+    case 0x1a:
+    case 0x1b:
+                setPWMOutput(req_register- 0x10,data0);
+                break;
+    case 0x30:  
+                break;
+  }
+}
+void requestEvent() {
+  Serial.print("i2c read for ");
+  Serial.println(req_register,HEX);
+  byte responsedata[2];
+  switch (req_register)
+  {
+    case 0x30:
+    case 0x31:
+    case 0x32:
+    case 0x33:
+    case 0x34:
+    case 0x35:
+    case 0x36:
+    case 0x37:
+    case 0x38:
+    case 0x39:
+    case 0x3a:
+    case 0x3b:
+                responsedata[0] = fanrpm[req_register - 0x30] / 256;
+                responsedata[1] = fanrpm[req_register - 0x30] % 256;
+                Wire.write(responsedata,2);
+                Serial.print("Send rpm for ");
+                Serial.print(req_register - 0x30);
+                Serial.print("value ");
+                Serial.println(fanrpm[req_register - 0x30]);
+                break;
+  }
+//  Wire.write("hello "); // respond with message of 6 bytes
+  // as expected by master
+}
+
+void setupPWM1(byte config) {
+/*
+  Timer Bytes: 
+  0: Enabled
+  1: 50Hz Output Enabled (prio)
+  2: 25kHz Output Enabled
+  3: Port A Enabled
+  4: Port B Enabled
+  5: Port C Enabled
+  6: not used
+  7: not used  
+  */
+  // 1: B5 / B6 / B7
+  // timer1
+  if (config & 1) {
+    if ((config >> 1) & 1 ) {
+      // 50Hz mode
+      ICR1 = 20000; // as top for 50Hz Mode
+      TCCR1B = _BV(CS11); // prescaler 8 ( 50Hz)
+    } else if ((config >> 2) & 1) {
+      // 25kHz mode
+      ICR1 = 320; // as top for 25kHz Mode
+      TCCR1B = _BV(CS10); // prescaler 1 ( 25kHz)
+    } else {
+      // what do you want ?
+      return;
+    }
+    // set needed pin as output
+//    DDRB |= _BV(PORTB5) | _BV(PORTB6) | _BV(PORTB7);
+    DDRB |= (((config >> 3) & 1) << PORTB5) | (((config >> 4) & 1) << PORTB6) | (((config >> 5) & 1) << PORTB7);
+    TIMSK1 = 0;
+    TIFR1 = 0;
+    TCNT1 = 0;
+    TCCR1B |= _BV(WGM13);  // PWM mode with ICR1 Mode 10
+    TCCR1A |= (((config >> 3) & 1) << COM1A1); // output A clear rising/set falling
+    TCCR1A |= (((config >> 4) & 1) << COM1B1); // output B clear rising/set falling
+    TCCR1A |= (((config >> 5) & 1) << COM1C1); // output C clear rising/set falling
+    TCCR1A |= _BV(WGM11);  // WGM13:WGM10 set 1010     
+  } else {
+    //disable timer
+    TCCR1B = 0;
+  }
+}
+
+void setupPWM3(byte config) {
+/*
+  Timer Bytes: 
+  0: Enabled
+  1: 50Hz Output Enabled (prio)
+  2: 25kHz Output Enabled
+  3: Port A Enabled
+  4: Port B Enabled
+  5: Port C Enabled
+  6: not used
+  7: not used  
+  */
+  // 3: E3 / E4 / E5
+  // timer3  
+  if (config & 1) {
+    if ((config >> 1) & 1 ) {
+      // 50Hz mode
+      ICR3 = 20000; // as top for 50Hz Mode
+      TCCR3B = _BV(CS31); // prescaler 8 ( 50Hz)
+    } else if ((config >> 2) & 1) {
+      // 25kHz mode
+      ICR3 = 320; // as top for 25kHz Mode
+      TCCR3B = _BV(CS30); // prescaler 1 ( 25kHz)
+    } else {
+      // what do you want ?
+      return;
+    }
+    // set needed pin as output
+    DDRE |= (((config >> 3) & 1) << PORTE3) | (((config >> 4) & 1) << PORTE4) | (((config >> 5) & 1) << PORTE5);
+    TIMSK3 = 0;
+    TIFR3 = 0;
+    TCNT3 = 0;
+    TCCR3B |= _BV(WGM33);  // PWM mode with ICR1 Mode 10
+    TCCR3A |= (((config >> 3) & 1) << COM3A1); // output A clear rising/set falling
+    TCCR3A |= (((config >> 4) & 1) << COM3B1); // output B clear rising/set falling
+    TCCR3A |= (((config >> 5) & 1) << COM3C1); // output C clear rising/set falling
+    TCCR3A |= _BV(WGM31);  // WGM33:WGM30 set 1010     
+//    TCCR3A = _BV(WGM31) | (1 << COM3A1) | (1 << COM3B1) | (1 << COM3C1);
+    Serial.println(TCCR3A,BIN);
+    Serial.println(config,BIN);
+  } else {
+    //disable timer
+    TCCR3B = 0;
+  }
+}
+void setupPWM4(byte config) {
+/*
+  Timer Bytes: 
+  0: Enabled
+  1: 50Hz Output Enabled (prio)
+  2: 25kHz Output Enabled
+  3: Port A Enabled
+  4: Port B Enabled
+  5: Port C Enabled
+  6: not used
+  7: not used  
+  */
+  // 4: H3 / H4 / H5
+  // timer4
+  if (config & 1) {
+    if ((config >> 1) & 1 ) {
+      // 50Hz mode
+      ICR4 = 20000; // as top for 50Hz Mode
+      TCCR4B = _BV(CS41); // prescaler 8 ( 50Hz)
+    } else if ((config >> 2) & 1) {
+      // 25kHz mode
+      ICR4 = 320; // as top for 25kHz Mode
+      TCCR4B = _BV(CS40); // prescaler 1 ( 25kHz)
+    } else {
+      // what do you want ?
+      return;
+    }
+    // set needed pin as output
+    DDRH |= (((config >> 3) & 1) << PORTH3) | (((config >> 4) & 1) << PORTH4) | (((config >> 5) & 1) << PORTH5);
+    TIMSK4 = 0;
+    TIFR4 = 0;
+    TCNT4 = 0;
+    TCCR4B |= _BV(WGM43);  // PWM mode with ICR1 Mode 10
+    TCCR4A |= (((config >> 3) & 1) << COM4A1); // output A clear rising/set falling
+    TCCR4A |= (((config >> 4) & 1) << COM4B1); // output B clear rising/set falling
+    TCCR4A |= (((config >> 5) & 1) << COM4C1); // output C clear rising/set falling
+    TCCR4A |= _BV(WGM41);  // WGM43:WGM40 set 1010     
+  } else {
+    //disable timer
+    TCCR4B = 0;
+  }
+}
+void setupPWM5(byte config) {
+/*
+  Timer Bytes: 
+  0: Enabled
+  1: 50Hz Output Enabled (prio)
+  2: 25kHz Output Enabled
+  3: Port A Enabled
+  4: Port B Enabled
+  5: Port C Enabled
+  6: not used
+  7: not used  
+  */
+  // 5: L3 / L4 / L5
+  // timer5
+  if (config & 1) {
+    if ((config >> 1) & 1 ) {
+      // 50Hz mode
+      ICR5 = 20000; // as top for 50Hz Mode
+      TCCR5B = _BV(CS51); // prescaler 8 ( 50Hz)
+    } else if ((config >> 2) & 1) {
+      // 25kHz mode
+      ICR5 = 320; // as top for 25kHz Mode
+      TCCR5B = _BV(CS50); // prescaler 1 ( 25kHz)
+    } else {
+      // what do you want ?
+      return;
+    }
+    // set needed pin as output
+    DDRL |= (((config >> 3) & 1) << PORTL3) | (((config >> 4) & 1) << PORTL4) | (((config >> 5) & 1) << PORTL5);
+    TIMSK5 = 0;
+    TIFR5 = 0;
+    TCNT5 = 0;
+    TCCR5B |= _BV(WGM53);  // PWM mode with ICR1 Mode 10
+    TCCR5A |= (((config >> 3) & 1) << COM5A1); // output A clear rising/set falling
+    TCCR5A |= (((config >> 4) & 1) << COM5B1); // output B clear rising/set falling
+    TCCR5A |= (((config >> 5) & 1) << COM5C1); // output C clear rising/set falling
+    TCCR5A |= _BV(WGM51);  // WGM53:WGM50 set 1010     
+  } else {
+    //disable timer
+    TCCR5B = 0;
+  }
+}
+
+void setupFromEEPROM()
+{
+  byte  initialcheck = EEPROM.read(0);
+  if (initialcheck == 255) {
+    Serial.println("no init from EEPROM");
+    return;} // EEPROM never writen
+
+  // init PWM Output for Timer 1 at address 0x01;
+  byte pwmoutputconfig = EEPROM.read(0x01);
+  Serial.print("Setup PWM1 with ");
+  Serial.println(pwmoutputconfig,BIN);
+  setupPWM1(pwmoutputconfig);
+  pwmoutputconfig = EEPROM.read(0x02);
+  Serial.print("Setup PWM3 with ");
+  Serial.println(pwmoutputconfig,BIN);
+  setupPWM3(pwmoutputconfig);
+  pwmoutputconfig = EEPROM.read(0x03);
+  Serial.print("Setup PWM4 with ");
+  Serial.println(pwmoutputconfig,BIN);
+  setupPWM4(pwmoutputconfig);
+  pwmoutputconfig = EEPROM.read(0x04);
+  Serial.print("Setup PWM5 with ");
+  Serial.println(pwmoutputconfig,BIN);
+  setupPWM5(pwmoutputconfig);
+}
+
+void setPWMOutput(byte channel,byte value)
+{
+  switch (channel){
+    case 0:
+            OCR1A = (unsigned int)((ICR1 * (float)value)/255.0f);
+            break;
+    case 1:
+            OCR1B = (unsigned int)((ICR1 * (float)value)/255.0f);
+            break;
+    case 2:
+            OCR1C = (unsigned int)((ICR1 * (float)value)/255.0f);
+            break;
+    case 3:
+            OCR3A = (unsigned int)((ICR3 * (float)value)/255.0f);
+            break;
+    case 4:
+            OCR3B = (unsigned int)((ICR3 * (float)value)/255.0f);
+            break;
+    case 5:
+            OCR3C = (unsigned int)((ICR3 * (float)value)/255.0f);
+            break;
+    case 6:
+            OCR4A = (unsigned int)((ICR4 * (float)value)/255.0f);
+            break;
+    case 7:
+            OCR4B = (unsigned int)((ICR4 * (float)value)/255.0f);
+            break;
+    case 8:
+            OCR4C = (unsigned int)((ICR4 * (float)value)/255.0f);
+            break;
+    case 9:
+            OCR5A = (unsigned int)((ICR5 * (float)value)/255.0f);
+            break;
+    case 10:
+            OCR5B = (unsigned int)((ICR5 * (float)value)/255.0f);
+            break;
+    case 11:
+            OCR5C = (unsigned int)((ICR5 * (float)value)/255.0f);
+            break;
+  }
+}
+
+int main() {
+  for (uint8_t c = 0; c < 12; c++) {
+    pccounter[c] = 0;
+  }
+  Serial.begin(115200);
+  Serial.write("Serial init...\n");
+  pcIntBegin();
+  RPMBegin();
+  setupFromEEPROM();
+  
+  OCR1A = 40;
+  OCR1B = 80;
+  OCR1C = 120;
+
+  OCR3A = 160;
+  OCR3B = 200;
+  OCR3C = 240;
+
+  OCR4A = 160;
+  OCR4B = 200;
+  OCR4C = 240;
+
+  OCR5A = 160;
+  OCR5B = 200;
+  OCR5C = 240;
+
+  Wire.begin(12 );                // join i2c bus with address #4
+  Wire.onReceive(receiveEvent); // register event
+  Wire.onRequest(requestEvent); // register event
+
+  while (1) {
+//    Serial.println(fanrpm[0],DEC);
+    _delay_ms(10000);
+    for (int i = 0;i < 12; i++) {
+//      Serial.print(fanrpm[i],DEC);
+//      Serial.print(" ");
+    }
+//    Serial.println("");
+    
+
+  }
+}
