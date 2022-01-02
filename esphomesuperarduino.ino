@@ -143,13 +143,13 @@ corresponding pinchange if RPM input is used (255 for none)
   if (config & 1) {
     uint16_t frequency = pwmconfig[1][1] * 256 + pwmconfig[1][2];
     // check for already used pins and disable the usage here
-    if (usedpins[1][PORTB5]) {
+    if (usedpins[1] & (1 << PORTB5)) {
       config &= (0 << PORTB5);
     }
-    if (usedpins[1][PORTB6]) {
+    if (usedpins[1] & (1 << PORTB6)) {
       config &= (0 << PORTB6);
     }
-    if (usedpins[1][PORTB7]) {
+    if (usedpins[1] & (1 << PORTB7)) {
       config &= (0 << PORTB7);
     }
     /*
@@ -182,9 +182,9 @@ corresponding pinchange if RPM input is used (255 for none)
     */
 
     uint16_t needed_prescaler = (F_CPU / 2 ^ 16) / frequency;
-    uint8_t prescaler;
+    uint16_t prescaler;
     TCCR1B = _BV(WGM13); // PWM mode with ICR1 Mode 10
-    if (needed_precaler < 1) {
+    if (needed_prescaler < 1) {
       TCCR1B |= _BV(CS10);
       prescaler = 1;
     } else if (needed_prescaler < 8) {
