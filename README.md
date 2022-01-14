@@ -112,7 +112,7 @@ The default I2C address is 0x0c and can be changed do to pin assignments or by c
 | 0xc5 | r/w | 2 | digital I/O port F <br> see details below
 | 0xc6 | r/w | 2 | digital I/O port G <br> see details below
 | 0xc7 | r/w | 2 | digital I/O port H <br> see details below
-| 0xc8 | r/w | 2 | digital I/O port I <br> see details below
+| 0xc8 | r/w | 2 | digital I/O port I <br> see details below    (not populated)
 | 0xc9 | r/w | 2 | digital I/O port J <br> see details below
 | 0xca | r/w | 2 | digital I/O port K <br> see details below
 | 0xcb | r/w | 2 | digital I/O port L <br> see details below

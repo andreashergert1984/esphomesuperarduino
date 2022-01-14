@@ -47,6 +47,13 @@ uint8_t ioconfig[12][2] = {0}; // 12 Ports: first byte: input/output for pin,
                                // second byte: pullup enabled
 uint8_t usedpins[12] = {0};    // an array to store all used pins on setupAll to
                                // prevent configuring the same pin twice
+uint16_t pccounter[12];        // counter for pin changes
+uint8_t
+    pcintstate[3]; // save the last state to determine which input was changed
+uint8_t pcintrisingmask[3] = {0};
+uint8_t pcintfallingmask[3] = {0};
+uint16_t currentanalogvalue[15] = {0};
+uint8_t currentanalogcounter = 0;
 
 int main() {
 
@@ -63,18 +70,25 @@ int main() {
 
 void setupAll() {
   // i2c
-  Wire.begin(i2caddress); // join i2c bus with address #4
+  Wire.begin(i2caddress); // join i2c bus as slave
   //  Wire.onReceive(receiveEvent); // register event
   //  Wire.onRequest(requestEvent); // register event
 
   // setup PWM Output
   setupPWM0();
   setupPWM1();
+  setupPWM2();
+  setupPWM3();
+  setupPWM4();
+  setupPWM5();
   // setup PinChange Input
-
-  // setup AD Input
+  setupPC();
+  // TODO RPM calculation
+  //  setup AD Input
+  setupADC();
 
   // setup IO
+  setupIO();
 }
 
 void loadFromEEPROM() {
@@ -115,10 +129,188 @@ void loadFromEEPROM() {
   }
 }
 
-void setupPWM0() {}
+void setupIO() {
+  //  ioconfig[12]
+  // setting direction filtered by already used ports
+  // output set
+  DDRA |= ioconfig[0][0] & ~usedpins[0];
+  DDRB |= ioconfig[1][0] & ~usedpins[1];
+  DDRC |= ioconfig[2][0] & ~usedpins[2];
+  DDRD |= ioconfig[3][0] & ~usedpins[3];
+  DDRE |= ioconfig[4][0] & ~usedpins[4];
+  DDRF |= ioconfig[5][0] & ~usedpins[5];
+  DDRG |= ioconfig[6][0] & ~usedpins[6];
+  DDRH |= ioconfig[7][0] & ~usedpins[7];
+  DDRJ |= ioconfig[8][0] & ~usedpins[8];
+  DDRK |= ioconfig[9][0] & ~usedpins[9];
+  DDRL |= ioconfig[10][0] & ~usedpins[10];
+  // input set
+  DDRA &= ~(ioconfig[0][0] | usedpins[0]); 
+  DDRB &= ~(ioconfig[1][0] | usedpins[1]); 
+  DDRC &= ~(ioconfig[2][0] | usedpins[2]); 
+  DDRD &= ~(ioconfig[3][0] | usedpins[3]); 
+  DDRE &= ~(ioconfig[4][0] | usedpins[4]); 
+  DDRF &= ~(ioconfig[5][0] | usedpins[5]); 
+  DDRG &= ~(ioconfig[6][0] | usedpins[6]); 
+  DDRH &= ~(ioconfig[7][0] | usedpins[7]); 
+  DDRJ &= ~(ioconfig[8][0] | usedpins[8]); 
+  DDRK &= ~(ioconfig[9][0] | usedpins[9]); 
+  DDRL &= ~(ioconfig[10][0] | usedpins[10]); 
+}
+/* PORTF PORTK
+adconfig[2]*/
+void setupADC() {
+  // checking used ports
+  for (auto i = 0; i < 8; i++) {
+    if (usedpins[6] & (1 << i)) {
+      adconfig[0] &= ~(1 << i);
+    }
+    if (usedpins[11] & (1 << i)) {
+      adconfig[1] &= ~(1 << i);
+    }
+  }
+  // set pins as input
+  for (auto i = 0; i < 8; i++) {
+    if (adconfig[0] & (1 << i)) {
+      DDRF &= ~(1 << i);
+    }
+    if (adconfig[1] & (1 << i)) {
+      DDRK &= ~(1 << i);
+    }
+  }
 
-void setupPWM1() {
-  /*
+  ADMUX = 0; // AREF is used
+  ADCSRA = (1 << ADEN) & (1 << ADIE);
+
+  // disable digital inputs for the analog pins
+  DIDR0 = adconfig[0];
+  DIDR2 = adconfig[1];
+  usedpins[6] |= adconfig[0];
+  usedpins[11] |= adconfig[1];
+  sei();
+}
+
+/*
+PCINT0: PORTB
+PCINT1: PE0; PJ0-PJ6
+PCINT2: PORTK
+
+*/
+void setupPC() {
+  /*  uint8_t pinchangeconfig[24] = {0}; // 24 possible pin change detections
+  | Byte | Bit | Description |
+  | ----------- | ----------- |----------- |
+  | 0 | 0 | enable/disable this pin change interrupt
+  | 0 | 1 | enable internal pullup
+  | 0 | 2 | inc counter on rising edge
+  | 0 | 3 | inc counter on falling edge
+  | 0 | 4 |
+  | 0 | 5 |
+  | 0 | 6 |
+  | 0 | 7 |
+  */
+  // checking for used pins
+  // for PORT PB
+  for (auto i = 0; i < 8; i++) {
+    if (usedpins[1] & (1 << i)) {
+      pinchangeconfig[i] =
+          0; // disable PinChange since already used by something
+    }
+  }
+  // for PORT PE0
+  if (usedpins[5] & (1 << 0)) {
+    pinchangeconfig[8] = 0;
+  }
+  // for PORT PJ
+  for (auto i = 9; i < 16; i++) {
+    if (usedpins[10] & (1 << i)) {
+      pinchangeconfig[i] =
+          0; // disable PinChange since already used by something
+    }
+  }
+  // for PORT PK
+  for (auto i = 16; i < 24; i++) {
+    if (usedpins[11] & (1 << i)) {
+      pinchangeconfig[i] =
+          0; // disable PinChange since already used by something
+    }
+  }
+
+  bool pciused[3] = {false}; // which pinchange interruped will be used
+  // setting up PC
+  for (auto i = 0; i < 24; i++) {
+    if (pinchangeconfig[i] & 1) { // pin for PC enabled
+                                  // TODO usedpins
+      pciused[i % 8] = 1;         // store if pci is used;
+      // PORTB
+      if (i < 8) {
+        // input
+        DDRB &= ~(1 << i);
+        usedpins[1] |= (1 << i);
+        // pullup enabled
+        if (pinchangeconfig[i] & (1 << 1)) {
+          PORTB |= (1 << i);
+        }
+        // enable pcintport mask
+        PCMSK0 |= (1 << i);
+      }
+      // PORTE0
+      if (i == 8) {
+        // input
+        DDRE &= ~(1 << DDE0);
+        usedpins[5] |= (1 << DDE0);
+        // pullup enabled
+        if (pinchangeconfig[i] & (1 << 1)) {
+          PORTE |= 1;
+        }
+        // enable pcintport mask
+        PCMSK1 |= 1;
+      }
+      if (i > 8 && i < 16) {
+        // input
+        DDRJ &= ~(1 << (i - 9));
+        usedpins[10] |= (1 << (i - 9));
+        // pullup enabled
+        if (pinchangeconfig[i] & (1 << 1)) {
+          PORTJ |= (1 << i - 9);
+        }
+        // enable pcintport mask
+        PCMSK1 |= (1 << i - 8);
+      }
+      if (i >= 16) {
+        // input
+        DDRK &= ~(1 << (i - 16));
+        usedpins[1] |= (1 << i);
+        // pullup enabled
+        if (pinchangeconfig[i] & (1 << 1)) {
+          PORTK |= (1 << i - 16);
+        }
+        // enable pcintport mask
+        PCMSK2 |= (1 << i - 16);
+      }
+      if (pinchangeconfig[i] & (1 << 2)) {
+        pcintrisingmask[(uint8_t)(i / 8)] |= (1 << i % 8);
+      }
+      if (pinchangeconfig[i] & (1 << 3)) {
+        pcintfallingmask[(uint8_t)(i / 8)] |= (1 << i % 8);
+      }
+    }
+  }
+  // enable all used PCI
+  PCICR = 0;
+  if (pciused[0]) {
+    PCICR |= PCIE0;
+  }
+  if (pciused[1]) {
+    PCICR |= PCIE1;
+  }
+  if (pciused[2]) {
+    PCICR |= PCIE2;
+  }
+  sei();
+}
+
+/*
 | Byte | Bit | Description |
 | ----------- | ----------- |----------- |
 | 0 | 0 | enable/disable this timer
@@ -135,7 +327,41 @@ used (255 for none) | 4 | all | for output 1: assign the corresponding pinchange
 if RPM input is used (255 for none) | 5 | all | for output 2: assign the
 corresponding pinchange if RPM input is used (255 for none)
 
-  */
+*/
+/*
+16 bit timer calculation:
+possible prescaler:
+1: CS10
+8: CS11
+64: CS10 & CS11
+256: CS12
+1024: CS12 & CS10
+algo:
+1. check for prescaler to fit cycle into 16 bit counter
+  cycles_per_s = F_CPU / 65536
+  needed_prescaler = cycles_per_s / frequency
+  if needed_precaler < 1024 -> prescaler = 1024
+  if needed_precaler < 256 -> prescaler = 256
+  if needed_precaler < 64 -> prescaler = 64
+  if needed_precaler < 8 -> prescaler = 8
+  if needed_precaler < 1 -> prescaler = 1
+2. calc ICRx
+  ( F_CPU / prescaler ) / frequency / 2
+example 50Hz:
+  needed_prescaler = ( 16 000 000 / 65535 ) / 50 = 4.88
+  prescaler = 8
+  ICR = ( 16 000 000 / 8 ) / 50 / 2 = 20 000
+example 25 000Hz:
+  needed_prescaler = ( 16 000 000 / 65535 ) / 25 000 = 0.00
+  prescaler = 1
+  ICR = ( 16 000 000 / 1 ) / 25 000 / 2 = 320
+*/
+
+void setupPWM0() {}
+
+void setupPWM2() {}
+
+void setupPWM1() {
   // using: pwmconfig[1];
   // 1: B5 / B6 / B7
   // timer1
@@ -144,42 +370,14 @@ corresponding pinchange if RPM input is used (255 for none)
     uint16_t frequency = pwmconfig[1][1] * 256 + pwmconfig[1][2];
     // check for already used pins and disable the usage here
     if (usedpins[1] & (1 << PORTB5)) {
-      config &= (0 << PORTB5);
+      config &= ~(1 << PORTB5);
     }
     if (usedpins[1] & (1 << PORTB6)) {
-      config &= (0 << PORTB6);
+      config &= ~(1 << PORTB6);
     }
     if (usedpins[1] & (1 << PORTB7)) {
-      config &= (0 << PORTB7);
+      config &= ~(1 << PORTB7);
     }
-    /*
-    16 bit timer calculation:
-    possible prescaler:
-    1: CS10
-    8: CS11
-    64: CS10 & CS11
-    256: CS12
-    1024: CS12 & CS10
-    algo:
-    1. check for prescaler to fit cycle into 16 bit counter
-      cycles_per_s = F_CPU / 65536
-      needed_prescaler = cycles_per_s / frequency
-      if needed_precaler < 1024 -> prescaler = 1024
-      if needed_precaler < 256 -> prescaler = 256
-      if needed_precaler < 64 -> prescaler = 64
-      if needed_precaler < 8 -> prescaler = 8
-      if needed_precaler < 1 -> prescaler = 1
-    2. calc ICRx
-      ( F_CPU / prescaler ) / frequency / 2
-    example 50Hz:
-      needed_prescaler = ( 16 000 000 / 65535 ) / 50 = 4.88
-      prescaler = 8
-      ICR = ( 16 000 000 / 8 ) / 50 / 2 = 20 000
-    example 25 000Hz:
-      needed_prescaler = ( 16 000 000 / 65535 ) / 25 000 = 0.00
-      prescaler = 1
-      ICR = ( 16 000 000 / 1 ) / 25 000 / 2 = 320
-    */
 
     uint16_t needed_prescaler = (F_CPU / 2 ^ 16) / frequency;
     uint16_t prescaler;
@@ -223,4 +421,262 @@ corresponding pinchange if RPM input is used (255 for none)
     // disable timer
     TCCR1B = 0;
   }
+}
+
+void setupPWM3() {
+  // using: pwmconfig[1];
+  // 1: E3 / E4 / E5
+  // timer1
+  uint8_t config = pwmconfig[3][0];
+  if (config & 1) {
+    uint16_t frequency = pwmconfig[3][1] * 256 + pwmconfig[3][2];
+    // check for already used pins and disable the usage here
+    if (usedpins[3] & (1 << PORTE3)) {
+      config &= ~(1 << PORTE3);
+    }
+    if (usedpins[3] & (1 << PORTE4)) {
+      config &= ~(1 << PORTE4);
+    }
+    if (usedpins[3] & (1 << PORTE5)) {
+      config &= ~(1 << PORTE5);
+    }
+
+    uint16_t needed_prescaler = (F_CPU / 2 ^ 16) / frequency;
+    uint16_t prescaler;
+    TCCR3B = _BV(WGM33); // PWM mode with ICR1 Mode 10
+    if (needed_prescaler < 1) {
+      TCCR3B |= _BV(CS30);
+      prescaler = 1;
+    } else if (needed_prescaler < 8) {
+      TCCR3B |= _BV(CS31);
+      prescaler = 8;
+    } else if (needed_prescaler < 64) {
+      TCCR3B |= _BV(CS31) | _BV(CS30);
+      prescaler = 64;
+    } else if (needed_prescaler < 256) {
+      TCCR3B |= _BV(CS32);
+      prescaler = 256;
+    } else if (needed_prescaler < 1024) {
+      TCCR3B |= _BV(CS32) | _BV(CS30);
+      prescaler = 1024;
+    }
+    ICR3 = (F_CPU / prescaler) / frequency / 2;
+
+    // set needed pin as output
+    //    DDRB |= _BV(PORTE3) | _BV(PORTE4) | _BV(PORTE5);
+    DDRE |= (((config >> 1) & 1) << PORTE3) | (((config >> 2) & 1) << PORTE4) |
+            (((config >> 3) & 1) << PORTE5);
+    TIMSK3 = 0;
+    TIFR3 = 0;
+    TCNT3 = 0;
+    TCCR3A |=
+        (((config >> 1) & 1) << COM3A1); // output A clear rising/set falling
+    TCCR3A |=
+        (((config >> 2) & 1) << COM3B1); // output B clear rising/set falling
+    TCCR3A |=
+        (((config >> 3) & 1) << COM3C1); // output C clear rising/set falling
+    TCCR3A |= _BV(WGM31);                // WGM13:WGM10 set 1010
+    usedpins[3] |= (((config >> 1) & 1) << PORTE3) |
+                   (((config >> 2) & 1) << PORTE4) |
+                   (((config >> 3) & 1) << PORTE5);
+  } else {
+    // disable timer
+    TCCR3B = 0;
+  }
+}
+void setupPWM4() {
+  // using: pwmconfig[1];
+  // 1: H3 / H4 / H5
+  // timer1
+  uint8_t config = pwmconfig[4][0];
+  if (config & 1) {
+    uint16_t frequency = pwmconfig[4][1] * 256 + pwmconfig[4][2];
+    // check for already used pins and disable the usage here
+    if (usedpins[4] & (1 << PORTH3)) {
+      config &= ~(1 << PORTH3);
+    }
+    if (usedpins[4] & (1 << PORTH4)) {
+      config &= ~(1 << PORTH4);
+    }
+    if (usedpins[4] & (1 << PORTH5)) {
+      config &= ~(1 << PORTH5);
+    }
+
+    uint16_t needed_prescaler = (F_CPU / 2 ^ 16) / frequency;
+    uint16_t prescaler;
+    TCCR4B = _BV(WGM43); // PWM mode with ICR1 Mode 10
+    if (needed_prescaler < 1) {
+      TCCR4B |= _BV(CS40);
+      prescaler = 1;
+    } else if (needed_prescaler < 8) {
+      TCCR4B |= _BV(CS41);
+      prescaler = 8;
+    } else if (needed_prescaler < 64) {
+      TCCR4B |= _BV(CS41) | _BV(CS40);
+      prescaler = 64;
+    } else if (needed_prescaler < 256) {
+      TCCR4B |= _BV(CS42);
+      prescaler = 256;
+    } else if (needed_prescaler < 1024) {
+      TCCR4B |= _BV(CS42) | _BV(CS40);
+      prescaler = 1024;
+    }
+    ICR4 = (F_CPU / prescaler) / frequency / 2;
+
+    // set needed pin as output
+    //    DDRB |= _BV(PORTH3) | _BV(PORTH4) | _BV(PORTEH5);
+    DDRH |= (((config >> 1) & 1) << PORTH3) | (((config >> 2) & 1) << PORTH4) |
+            (((config >> 3) & 1) << PORTH5);
+    TIMSK4 = 0;
+    TIFR4 = 0;
+    TCNT4 = 0;
+    TCCR4A |=
+        (((config >> 1) & 1) << COM4A1); // output A clear rising/set falling
+    TCCR4A |=
+        (((config >> 2) & 1) << COM4B1); // output B clear rising/set falling
+    TCCR4A |=
+        (((config >> 3) & 1) << COM4C1); // output C clear rising/set falling
+    TCCR4A |= _BV(WGM41);                // WGM13:WGM10 set 1010
+    usedpins[3] |= (((config >> 1) & 1) << PORTE3) |
+                   (((config >> 2) & 1) << PORTE4) |
+                   (((config >> 3) & 1) << PORTE5);
+  } else {
+    // disable timer
+    TCCR4B = 0;
+  }
+}
+
+void setupPWM5() {
+  // using: pwmconfig[1];
+  // 1: L3 / L4 / L5
+  // timer1
+  uint8_t config = pwmconfig[5][0];
+  if (config & 1) {
+    uint16_t frequency = pwmconfig[5][1] * 256 + pwmconfig[5][2];
+    // check for already used pins and disable the usage here
+    if (usedpins[5] & (1 << PORTL3)) {
+      config &= ~(1 << PORTL3);
+    }
+    if (usedpins[5] & (1 << PORTL4)) {
+      config &= ~(1 << PORTL4);
+    }
+    if (usedpins[5] & (1 << PORTL5)) {
+      config &= ~(1 << PORTL5);
+    }
+
+    uint16_t needed_prescaler = (F_CPU / 2 ^ 16) / frequency;
+    uint16_t prescaler;
+    TCCR5B = _BV(WGM53); // PWM mode with ICR1 Mode 10
+    if (needed_prescaler < 1) {
+      TCCR5B |= _BV(CS50);
+      prescaler = 1;
+    } else if (needed_prescaler < 8) {
+      TCCR5B |= _BV(CS51);
+      prescaler = 8;
+    } else if (needed_prescaler < 64) {
+      TCCR5B |= _BV(CS51) | _BV(CS50);
+      prescaler = 64;
+    } else if (needed_prescaler < 256) {
+      TCCR5B |= _BV(CS52);
+      prescaler = 256;
+    } else if (needed_prescaler < 1024) {
+      TCCR5B |= _BV(CS52) | _BV(CS50);
+      prescaler = 1024;
+    }
+    ICR5 = (F_CPU / prescaler) / frequency / 2;
+
+    // set needed pin as output
+    //    DDRB |= _BV(PORTH3) | _BV(PORTH4) | _BV(PORTEH5);
+    DDRL |= (((config >> 1) & 1) << PORTL3) | (((config >> 2) & 1) << PORTL4) |
+            (((config >> 3) & 1) << PORTL5);
+    TIMSK5 = 0;
+    TIFR5 = 0;
+    TCNT5 = 0;
+    TCCR5A |=
+        (((config >> 1) & 1) << COM5A1); // output A clear rising/set falling
+    TCCR5A |=
+        (((config >> 2) & 1) << COM5B1); // output B clear rising/set falling
+    TCCR5A |=
+        (((config >> 3) & 1) << COM5C1); // output C clear rising/set falling
+    TCCR5A |= _BV(WGM51);                // WGM13:WGM10 set 1010
+    usedpins[5] |= (((config >> 1) & 1) << PORTL3) |
+                   (((config >> 2) & 1) << PORTL4) |
+                   (((config >> 3) & 1) << PORTL5);
+  } else {
+    // disable timer
+    TCCR5B = 0;
+  }
+}
+
+// PCINT0 PORTB
+ISR(PCINT0_vect) {
+  /*
+   pcintfallingmask
+   pcintrisingmask
+   */
+  // XOR to check which pin changed and which are enabled for pinchange
+  uint8_t flippedbyte = (pcintstate[0] ^ PINB) & PCMSK0;
+  uint8_t addfalling = ~PINB & flippedbyte & pcintfallingmask[0];
+  uint8_t addrising = PINB & flippedbyte & pcintrisingmask[0];
+
+  pccounter[0] += (addfalling & 0x01) >> 0 + (addrising & 0x01) >> 0;
+  pccounter[1] += (addfalling & 0x02) >> 1 + (addrising & 0x02) >> 1;
+  pccounter[2] += (addfalling & 0x04) >> 2 + (addrising & 0x04) >> 2;
+  pccounter[3] += (addfalling & 0x08) >> 3 + (addrising & 0x08) >> 3;
+  pccounter[4] += (addfalling & 0x10) >> 4 + (addrising & 0x10) >> 4;
+  pccounter[5] += (addfalling & 0x20) >> 5 + (addrising & 0x20) >> 5;
+  pccounter[6] += (addfalling & 0x40) >> 6 + (addrising & 0x40) >> 6;
+  pccounter[7] += (addfalling & 0x80) >> 7 + (addrising & 0x80) >> 7;
+  pcintstate[0] = PINB;
+}
+
+// PCINT1 PORTE0 ; PORTJ0-PORTJ6
+ISR(PCINT1_vect) {
+  /*
+   pcintfallingmask
+   pcintrisingmask
+   */
+  // XOR to check which pin changed and which are enabled for pinchange
+  uint8_t input = (PORTJ << 1) | (PORTE & 1);
+  uint8_t flippedbyte = (pcintstate[1] ^ input) & PCMSK0;
+  uint8_t addfalling = ~input & flippedbyte & pcintfallingmask[0];
+  uint8_t addrising = input & flippedbyte & pcintrisingmask[0];
+
+  pccounter[8] += (addfalling & 0x01) >> 0 + (addrising & 0x01) >> 0;
+  pccounter[9] += (addfalling & 0x02) >> 1 + (addrising & 0x02) >> 1;
+  pccounter[10] += (addfalling & 0x04) >> 2 + (addrising & 0x04) >> 2;
+  pccounter[11] += (addfalling & 0x08) >> 3 + (addrising & 0x08) >> 3;
+  pccounter[12] += (addfalling & 0x10) >> 4 + (addrising & 0x10) >> 4;
+  pccounter[13] += (addfalling & 0x20) >> 5 + (addrising & 0x20) >> 5;
+  pccounter[14] += (addfalling & 0x40) >> 6 + (addrising & 0x40) >> 6;
+  pccounter[15] += (addfalling & 0x80) >> 7 + (addrising & 0x80) >> 7;
+  pcintstate[1] = input;
+}
+
+// PCINT2 PORTK
+ISR(PCINT2_vect) {
+  /*
+   pcintfallingmask
+   pcintrisingmask
+   */
+  // XOR to check which pin changed and which are enabled for pinchange
+  uint8_t flippedbyte = (pcintstate[2] ^ PINK) & PCMSK2;
+  uint8_t addfalling = ~PINK & flippedbyte & pcintfallingmask[0];
+  uint8_t addrising = PINK & flippedbyte & pcintrisingmask[0];
+
+  pccounter[16] += (addfalling & 0x01) >> 0 + (addrising & 0x01) >> 0;
+  pccounter[17] += (addfalling & 0x02) >> 1 + (addrising & 0x02) >> 1;
+  pccounter[18] += (addfalling & 0x04) >> 2 + (addrising & 0x04) >> 2;
+  pccounter[19] += (addfalling & 0x08) >> 3 + (addrising & 0x08) >> 3;
+  pccounter[20] += (addfalling & 0x10) >> 4 + (addrising & 0x10) >> 4;
+  pccounter[21] += (addfalling & 0x20) >> 5 + (addrising & 0x20) >> 5;
+  pccounter[22] += (addfalling & 0x40) >> 6 + (addrising & 0x40) >> 6;
+  pccounter[23] += (addfalling & 0x80) >> 7 + (addrising & 0x80) >> 7;
+  pcintstate[2] = PINK;
+}
+
+ISR(ADC_vect) {
+  currentanalogvalue[currentanalogcounter] = ADCL + ADCH * 256;
+  currentanalogcounter = (currentanalogcounter + 1) % 16;
+  // TODO trigger next reading
 }
