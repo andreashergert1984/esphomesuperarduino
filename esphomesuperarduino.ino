@@ -29,7 +29,7 @@
 
 #define EEPROMMAX 512
 #define MEGA2560 1
-#define version 1 // current version of software and interface
+#define VERSION 1 // current version of software and interface
 
 // define storage areas in EEPROM
 #define EEPROM_I2CADDRESS 0x00 // 1 byte
@@ -38,9 +38,13 @@
 #define EEPROM_ADCONFIG 0x3d   // 2 bytes
 #define EEPROM_IOCONFIG 0x3f   // 24 bytes
 
-#define mctype MEGA2560;           // mega2560
-uint8_t i2caddress = 0x0a;         // default address
-uint8_t pwmconfig[6][6] = {0};     // six bytes for six pwm configurations
+#define MCTYPE MEGA2560;       // mega2560
+uint8_t i2caddress = 0x0a;     // default address
+uint8_t pwmconfig[6][6] = {0}; // six bytes for six pwm configurations
+uint16_t pwmduty[18] = {
+    0}; // current requested pwm duty (always stored as 16 bit)
+uint16_t rpmrequest[18] = {
+    0}; // current requested rpm (always stored as 16 bit)
 uint8_t pinchangeconfig[24] = {0}; // 24 possible pin change detections
 uint8_t adconfig[2] = {0};     // 2 bytes for the 16 ad channel to be enabled
 uint8_t ioconfig[12][2] = {0}; // 12 Ports: first byte: input/output for pin,
@@ -54,25 +58,26 @@ uint8_t pcintrisingmask[3] = {0};
 uint8_t pcintfallingmask[3] = {0};
 uint16_t currentanalogvalue[15] = {0};
 uint8_t currentanalogcounter = 0;
+uint8_t req_register; // requested Byte
 
 int main() {
 
 #if DEBUG
+  usedpins[4] |= 3; // PE0 and PE1 for uart
   Serial.begin(115200);
 #endif
 
   void loadFromEEPROM();
   void setupAll();
-
   while (1) {
   }
 }
 
 void setupAll() {
   // i2c
-  Wire.begin(i2caddress); // join i2c bus as slave
-  //  Wire.onReceive(receiveEvent); // register event
-  //  Wire.onRequest(requestEvent); // register event
+  Wire.begin(i2caddress);       // join i2c bus as slave
+  Wire.onReceive(receiveEvent); // register event
+  Wire.onRequest(requestEvent); // register event
 
   // setup PWM Output
   setupPWM0();
@@ -89,6 +94,328 @@ void setupAll() {
 
   // setup IO
   setupIO();
+  sei();
+}
+
+void requestEvent() {
+  PRINTX("i2c read for ", req_register);
+  byte responsedata[6];
+  switch (req_register) {
+  case 0x00: // version
+    responsedata[0] = VERSION;
+    Wire.write(responsedata[0]);
+    break;
+  case 0x01: // controller type
+    responsedata[0] = MCTYPE;
+    Wire.write(responsedata[0]);
+    break;
+  case 0x10: // PWM Config
+  case 0x11: // PWM Config
+  case 0x12: // PWM Config
+  case 0x13: // PWM Config
+  case 0x14: // PWM Config
+  case 0x15: // PWM Config
+    for (auto configbyte = 0; configbyte < 6; configbyte++) {
+      responsedata[configbyte] = EEPROM.read(
+          EEPROM_PWMCONFIG + (req_register - 0x10) * 6 + configbyte);
+    }
+    Wire.write(responsedata, 6);
+    break;
+  case 0x30: // pwm duty 1byte
+  case 0x31: // pwm duty 1byte
+  case 0x32: // pwm duty 1byte
+  case 0x33: // pwm duty 1byte
+  case 0x34: // pwm duty 1byte
+  case 0x35: // pwm duty 1byte
+  case 0x36: // pwm duty 1byte
+  case 0x37: // pwm duty 1byte
+  case 0x38: // pwm duty 1byte
+  case 0x39: // pwm duty 1byte
+  case 0x3a: // pwm duty 1byte
+  case 0x3b: // pwm duty 1byte
+  case 0x3c: // pwm duty 1byte
+  case 0x3d: // pwm duty 1byte
+  case 0x3e: // pwm duty 1byte
+  case 0x3f: // pwm duty 1byte
+  case 0x40: // pwm duty 1byte
+  case 0x41: // pwm duty 1byte
+    responsedata[0] = pwmduty[req_register - 0x30] / 256;
+    Wire.write(responsedata[0]);
+    break;
+  case 0x50: // pwm duty 2bytes
+  case 0x51: // pwm duty 2bytes
+  case 0x52: // pwm duty 2bytes
+  case 0x53: // pwm duty 2bytes
+  case 0x54: // pwm duty 2bytes
+  case 0x55: // pwm duty 2bytes
+  case 0x56: // pwm duty 2bytes
+  case 0x57: // pwm duty 2bytes
+  case 0x58: // pwm duty 2bytes
+  case 0x59: // pwm duty 2bytes
+  case 0x5a: // pwm duty 2bytes
+  case 0x5b: // pwm duty 2bytes
+  case 0x5c: // pwm duty 2bytes
+  case 0x5d: // pwm duty 2bytes
+  case 0x5e: // pwm duty 2bytes
+  case 0x5f: // pwm duty 2bytes
+  case 0x60: // pwm duty 2bytes
+  case 0x61: // pwm duty 2bytes
+    responsedata[0] = pwmduty[req_register - 0x30] / 256;
+    responsedata[1] = pwmduty[req_register - 0x30] % 256;
+    Wire.write(responsedata,2);
+    break;
+  case 0x70: // RPM 2 bytes
+  case 0x71: // RPM 2 bytes
+  case 0x72: // RPM 2 bytes
+  case 0x73: // RPM 2 bytes
+  case 0x74: // RPM 2 bytes
+  case 0x75: // RPM 2 bytes
+  case 0x76: // RPM 2 bytes
+  case 0x77: // RPM 2 bytes
+  case 0x78: // RPM 2 bytes
+  case 0x79: // RPM 2 bytes
+  case 0x7a: // RPM 2 bytes
+  case 0x7b: // RPM 2 bytes
+  case 0x7c: // RPM 2 bytes
+  case 0x7d: // RPM 2 bytes
+  case 0x7e: // RPM 2 bytes
+  case 0x7f: // RPM 2 bytes
+  case 0x80: // RPM 2 bytes
+  case 0x81: // RPM 2 bytes
+    responsedata[0] = pwmduty[req_register - 0x70] / 256;
+    responsedata[1] = pwmduty[req_register - 0x70] % 256;
+    Wire.write(responsedata,2);
+    break;
+  case 0x90: // pinchange config 1 byte
+  case 0x91: // pinchange config 1 byte
+  case 0x92: // pinchange config 1 byte
+  case 0x93: // pinchange config 1 byte
+  case 0x94: // pinchange config 1 byte
+  case 0x95: // pinchange config 1 byte
+  case 0x96: // pinchange config 1 byte
+  case 0x97: // pinchange config 1 byte
+  case 0x98: // pinchange config 1 byte
+  case 0x99: // pinchange config 1 byte
+  case 0x9a: // pinchange config 1 byte
+  case 0x9b: // pinchange config 1 byte
+  case 0x9c: // pinchange config 1 byte
+  case 0x9d: // pinchange config 1 byte
+  case 0x9e: // pinchange config 1 byte
+  case 0x9f: // pinchange config 1 byte
+  case 0xa0: // pinchange config 1 byte
+  case 0xa1: // pinchange config 1 byte
+  case 0xa2: // pinchange config 1 byte
+  case 0xa3: // pinchange config 1 byte
+  case 0xa4: // pinchange config 1 byte
+  case 0xa5: // pinchange config 1 byte
+  case 0xa6: // pinchange config 1 byte
+  case 0xa7: // pinchange config 1 byte
+    responsedata[0] = EEPROM.read(EEPROM_PCCONFIG + (req_register - 0x90));
+    Wire.write(responsedata[0]);
+    break;
+  case 0xb0: // adc config 1 byte
+  case 0xb1: // adc config 1 byte
+    responsedata[0] = EEPROM.read(EEPROM_ADCONFIG + (req_register - 0xb0));
+    Wire.write(responsedata[0]);
+    break;
+  case 0xc0: // config digital io porta 2 bytes
+  case 0xc1: // config digital io portb 2 bytes
+  case 0xc2: // config digital io portc 2 bytes
+  case 0xc3: // config digital io portd 2 bytes
+  case 0xc4: // config digital io porte 2 bytes
+  case 0xc5: // config digital io portf 2 bytes
+  case 0xc6: // config digital io portg 2 bytes
+  case 0xc7: // config digital io porth 2 bytes
+  case 0xc8: // config digital io porti 2 bytes
+  case 0xc9: // config digital io portj 2 bytes
+  case 0xca: // config digital io portk 2 bytes
+  case 0xcb: // config digital io portl 2 bytes
+    for (auto configbyte = 0; configbyte < 2; configbyte++) {
+      responsedata[configbyte] =
+          EEPROM.read(EEPROM_IOCONFIG + (req_register - 0xc0) * 2 + configbyte);
+    }
+    Wire.write(responsedata, 2);
+    break;
+  }
+}
+
+void receiveEvent(int howMany) {
+
+  if (howMany == 0) {
+    PRINTS("just a ping");
+    return; // just a ping
+  }
+  req_register = Wire.read();
+  bool changed = false;
+  uint8_t data[6]; // up to 6 bytes data is defined
+  switch (req_register) {
+  case 0x10: // PWM Config
+  case 0x11: // PWM Config
+  case 0x12: // PWM Config
+  case 0x13: // PWM Config
+  case 0x14: // PWM Config
+  case 0x15: // PWM Config
+    if (howMany == 7) {
+      for (auto i = 0; i < 6; i++) {
+        data[i] = Wire.read();
+      }
+      for (auto configbyte = 0; configbyte < 6; configbyte++) {
+        if (EEPROM.read(EEPROM_PWMCONFIG + (req_register - 0x10) * 6 +
+                        configbyte) != data[configbyte]) {
+          changed = true;
+        }
+        EEPROM.update(EEPROM_PWMCONFIG + (req_register - 0x10) * 6 + configbyte,
+                      data[configbyte]);
+      }
+
+    } else {
+      PRINTS("got other than 6 byte data for pwm config");
+    }
+    break;
+  case 0x30: // pwm duty 1byte
+  case 0x31: // pwm duty 1byte
+  case 0x32: // pwm duty 1byte
+  case 0x33: // pwm duty 1byte
+  case 0x34: // pwm duty 1byte
+  case 0x35: // pwm duty 1byte
+  case 0x36: // pwm duty 1byte
+  case 0x37: // pwm duty 1byte
+  case 0x38: // pwm duty 1byte
+  case 0x39: // pwm duty 1byte
+  case 0x3a: // pwm duty 1byte
+  case 0x3b: // pwm duty 1byte
+  case 0x3c: // pwm duty 1byte
+  case 0x3d: // pwm duty 1byte
+  case 0x3e: // pwm duty 1byte
+  case 0x3f: // pwm duty 1byte
+  case 0x40: // pwm duty 1byte
+  case 0x41: // pwm duty 1byte
+    // TODO
+    break;
+  case 0x50: // pwm duty 2bytes
+  case 0x51: // pwm duty 2bytes
+  case 0x52: // pwm duty 2bytes
+  case 0x53: // pwm duty 2bytes
+  case 0x54: // pwm duty 2bytes
+  case 0x55: // pwm duty 2bytes
+  case 0x56: // pwm duty 2bytes
+  case 0x57: // pwm duty 2bytes
+  case 0x58: // pwm duty 2bytes
+  case 0x59: // pwm duty 2bytes
+  case 0x5a: // pwm duty 2bytes
+  case 0x5b: // pwm duty 2bytes
+  case 0x5c: // pwm duty 2bytes
+  case 0x5d: // pwm duty 2bytes
+  case 0x5e: // pwm duty 2bytes
+  case 0x5f: // pwm duty 2bytes
+  case 0x60: // pwm duty 2bytes
+  case 0x61: // pwm duty 2bytes
+    // TODO
+    break;
+  case 0x70: // RPM 2 bytes
+  case 0x71: // RPM 2 bytes
+  case 0x72: // RPM 2 bytes
+  case 0x73: // RPM 2 bytes
+  case 0x74: // RPM 2 bytes
+  case 0x75: // RPM 2 bytes
+  case 0x76: // RPM 2 bytes
+  case 0x77: // RPM 2 bytes
+  case 0x78: // RPM 2 bytes
+  case 0x79: // RPM 2 bytes
+  case 0x7a: // RPM 2 bytes
+  case 0x7b: // RPM 2 bytes
+  case 0x7c: // RPM 2 bytes
+  case 0x7d: // RPM 2 bytes
+  case 0x7e: // RPM 2 bytes
+  case 0x7f: // RPM 2 bytes
+  case 0x80: // RPM 2 bytes
+  case 0x81: // RPM 2 bytes
+    // TODO
+    break;
+  case 0x90: // pinchange config 1 byte
+  case 0x91: // pinchange config 1 byte
+  case 0x92: // pinchange config 1 byte
+  case 0x93: // pinchange config 1 byte
+  case 0x94: // pinchange config 1 byte
+  case 0x95: // pinchange config 1 byte
+  case 0x96: // pinchange config 1 byte
+  case 0x97: // pinchange config 1 byte
+  case 0x98: // pinchange config 1 byte
+  case 0x99: // pinchange config 1 byte
+  case 0x9a: // pinchange config 1 byte
+  case 0x9b: // pinchange config 1 byte
+  case 0x9c: // pinchange config 1 byte
+  case 0x9d: // pinchange config 1 byte
+  case 0x9e: // pinchange config 1 byte
+  case 0x9f: // pinchange config 1 byte
+  case 0xa0: // pinchange config 1 byte
+  case 0xa1: // pinchange config 1 byte
+  case 0xa2: // pinchange config 1 byte
+  case 0xa3: // pinchange config 1 byte
+  case 0xa4: // pinchange config 1 byte
+  case 0xa5: // pinchange config 1 byte
+  case 0xa6: // pinchange config 1 byte
+  case 0xa7: // pinchange config 1 byte
+    if (howMany == 2) {
+      data[0] = Wire.read();
+      if (EEPROM.read(EEPROM_PCCONFIG + (req_register - 0x90)) != data[0]) {
+        changed = true;
+      }
+      EEPROM.update(EEPROM_PCCONFIG + (req_register - 0x90), data[0]);
+    } else {
+      PRINTS("got other than 1 byte data for pinchange config");
+    }
+    break;
+  case 0xb0: // adc config 1 byte
+  case 0xb1: // adc config 1 byte
+    if (howMany == 2) {
+      data[0] = Wire.read();
+      if (EEPROM.read(EEPROM_ADCONFIG + (req_register - 0xb0)) != data[0]) {
+        changed = true;
+      }
+
+      EEPROM.update(EEPROM_ADCONFIG + (req_register - 0xb0), data[0]);
+    } else {
+      PRINTS("got other than 1 byte data for adc config");
+    }
+    break;
+  case 0xc0: // digital io porta 2 bytes
+  case 0xc1: // digital io portb 2 bytes
+  case 0xc2: // digital io portc 2 bytes
+  case 0xc3: // digital io portd 2 bytes
+  case 0xc4: // digital io porte 2 bytes
+  case 0xc5: // digital io portf 2 bytes
+  case 0xc6: // digital io portg 2 bytes
+  case 0xc7: // digital io porth 2 bytes
+  case 0xc8: // digital io porti 2 bytes
+  case 0xc9: // digital io portj 2 bytes
+  case 0xca: // digital io portk 2 bytes
+  case 0xcb: // digital io portl 2 bytes
+    if (howMany == 3) {
+      for (auto i = 0; i < 1; i++) {
+        data[i] = Wire.read();
+      }
+      for (auto configbyte = 0; configbyte < 2; configbyte++) {
+        if (EEPROM.read(EEPROM_IOCONFIG + (req_register - 0xc0) * 2 +
+                        configbyte) != data[configbyte]) {
+          changed = true;
+        }
+
+        EEPROM.update(EEPROM_IOCONFIG + (req_register - 0xc0) * 2 + configbyte,
+                      data[configbyte]);
+      }
+    } else {
+      PRINTS("got other than 2 byte data for io config");
+    }
+    break;
+  }
+  while (Wire.available()) {
+    Wire.read();
+  };
+  if (changed) {
+    loadFromEEPROM();
+    setupAll();
+  }
 }
 
 void loadFromEEPROM() {
@@ -115,7 +442,7 @@ void loadFromEEPROM() {
   // pinchange config
   for (uint8_t pcconfigcounter = 0; pcconfigcounter < 24; pcconfigcounter++) {
     pinchangeconfig[pcconfigcounter] =
-        EEPROM.read(EEPROM_PWMCONFIG + pcconfigcounter);
+        EEPROM.read(EEPROM_PCCONFIG + pcconfigcounter);
   }
   // ad config
   adconfig[0] = EEPROM.read(EEPROM_ADCONFIG);
@@ -141,21 +468,37 @@ void setupIO() {
   DDRF |= ioconfig[5][0] & ~usedpins[5];
   DDRG |= ioconfig[6][0] & ~usedpins[6];
   DDRH |= ioconfig[7][0] & ~usedpins[7];
-  DDRJ |= ioconfig[8][0] & ~usedpins[8];
-  DDRK |= ioconfig[9][0] & ~usedpins[9];
-  DDRL |= ioconfig[10][0] & ~usedpins[10];
+  //  DDRI |= ioconfig[8][0] & ~usedpins[8];
+  DDRJ |= ioconfig[9][0] & ~usedpins[9];
+  DDRK |= ioconfig[10][0] & ~usedpins[10];
+  DDRL |= ioconfig[11][0] & ~usedpins[11];
   // input set
-  DDRA &= ~(ioconfig[0][0] | usedpins[0]); 
-  DDRB &= ~(ioconfig[1][0] | usedpins[1]); 
-  DDRC &= ~(ioconfig[2][0] | usedpins[2]); 
-  DDRD &= ~(ioconfig[3][0] | usedpins[3]); 
-  DDRE &= ~(ioconfig[4][0] | usedpins[4]); 
-  DDRF &= ~(ioconfig[5][0] | usedpins[5]); 
-  DDRG &= ~(ioconfig[6][0] | usedpins[6]); 
-  DDRH &= ~(ioconfig[7][0] | usedpins[7]); 
-  DDRJ &= ~(ioconfig[8][0] | usedpins[8]); 
-  DDRK &= ~(ioconfig[9][0] | usedpins[9]); 
-  DDRL &= ~(ioconfig[10][0] | usedpins[10]); 
+  DDRA &= ~(ioconfig[0][0] | usedpins[0]);
+  DDRB &= ~(ioconfig[1][0] | usedpins[1]);
+  DDRC &= ~(ioconfig[2][0] | usedpins[2]);
+  DDRD &= ~(ioconfig[3][0] | usedpins[3]);
+  DDRE &= ~(ioconfig[4][0] | usedpins[4]);
+  DDRF &= ~(ioconfig[5][0] | usedpins[5]);
+  DDRG &= ~(ioconfig[6][0] | usedpins[6]);
+  DDRH &= ~(ioconfig[7][0] | usedpins[7]);
+  //  DDRI &= ~(ioconfig[8][0] | usedpins[8]);
+  DDRJ &= ~(ioconfig[9][0] | usedpins[9]);
+  DDRK &= ~(ioconfig[10][0] | usedpins[10]);
+  DDRL &= ~(ioconfig[11][0] | usedpins[11]);
+
+  // pullups set filtered by free pins
+  PORTA = ioconfig[0][1] & ~usedpins[0];
+  PORTB = ioconfig[1][1] & ~usedpins[1];
+  PORTC = ioconfig[2][1] & ~usedpins[2];
+  PORTD = ioconfig[3][1] & ~usedpins[3];
+  PORTE = ioconfig[4][1] & ~usedpins[4];
+  PORTF = ioconfig[5][1] & ~usedpins[5];
+  PORTG = ioconfig[6][1] & ~usedpins[6];
+  PORTH = ioconfig[7][1] & ~usedpins[7];
+  //  PORTI = ioconfig[8][1] & ~usedpins[8];
+  PORTJ = ioconfig[9][1] & ~usedpins[9];
+  PORTK = ioconfig[10][1] & ~usedpins[10];
+  PORTL = ioconfig[11][1] & ~usedpins[11];
 }
 /* PORTF PORTK
 adconfig[2]*/
@@ -323,9 +666,9 @@ void setupPC() {
 | 0 | 7 |
 | 1-2 | all | PWM frequency (0-65k)
 | 3 | all | for output 0: assign the corresponding pinchange if RPM input is
-used (255 for none) | 4 | all | for output 1: assign the corresponding pinchange
-if RPM input is used (255 for none) | 5 | all | for output 2: assign the
-corresponding pinchange if RPM input is used (255 for none)
+used (255 for none) | 4 | all | for output 1: assign the corresponding
+pinchange if RPM input is used (255 for none) | 5 | all | for output 2: assign
+the corresponding pinchange if RPM input is used (255 for none)
 
 */
 /*
@@ -677,6 +1020,9 @@ ISR(PCINT2_vect) {
 
 ISR(ADC_vect) {
   currentanalogvalue[currentanalogcounter] = ADCL + ADCH * 256;
-  currentanalogcounter = (currentanalogcounter + 1) % 16;
+
+  // do {
+  //   currentanalogcounter = (currentanalogcounter + 1) % 16;
+  // } while (! adconfig[currentanalogcounter / 8][currentanalogcounter % 8])
   // TODO trigger next reading
 }
