@@ -162,7 +162,7 @@ void requestEvent() {
   case 0x61: // pwm duty 2bytes
     responsedata[0] = pwmduty[req_register - 0x30] / 256;
     responsedata[1] = pwmduty[req_register - 0x30] % 256;
-    Wire.write(responsedata,2);
+    Wire.write(responsedata, 2);
     break;
   case 0x70: // RPM 2 bytes
   case 0x71: // RPM 2 bytes
@@ -184,7 +184,7 @@ void requestEvent() {
   case 0x81: // RPM 2 bytes
     responsedata[0] = pwmduty[req_register - 0x70] / 256;
     responsedata[1] = pwmduty[req_register - 0x70] % 256;
-    Wire.write(responsedata,2);
+    Wire.write(responsedata, 2);
     break;
   case 0x90: // pinchange config 1 byte
   case 0x91: // pinchange config 1 byte
