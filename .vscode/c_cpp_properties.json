@@ -9,9 +9,7 @@
             "includePath": [
                 "/home/andreas/bin/arduino/libraries/**"
             ],
-            "compilerArgs": [
-                "-DF_CPU=8000000UL"
-            ]
+            "compilerArgs": []
         }
     ],
     "version": 4

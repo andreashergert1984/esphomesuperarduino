@@ -2,7 +2,7 @@
 #include <Wire.h>
 #include <avr/interrupt.h>
 #include <avr/io.h>
-#include <util/delay.h>
+//#include <util/delay.h>
 
 // Debugging switches and macros
 #define DEBUG 1 // Switch debug output on and off by 1 or 0
@@ -32,7 +32,7 @@
 #define VERSION 1 // current version of software and interface
 
 // define storage areas in EEPROM
-#define EEPROM_I2CADDRESS 0x00 // 1 byte
+#define EEPROM_I2CADDRESS 0xa0 // 1 byte
 #define EEPROM_PWMCONFIG 0x01  // 6 * 6 bytes
 #define EEPROM_PCCONFIG 0x25   // 24 bytes
 #define EEPROM_ADCONFIG 0x3d   // 2 bytes
@@ -60,18 +60,17 @@ uint16_t currentanalogvalue[15] = {0};
 uint8_t currentanalogcounter = 0;
 uint8_t req_register; // requested Byte
 
-int main() {
-
+void setup() {
 #if DEBUG
   usedpins[4] |= 3; // PE0 and PE1 for uart
   Serial.begin(115200);
+  PRINTS("Starting with debug\n");
 #endif
-
-  void loadFromEEPROM();
-  void setupAll();
-  while (1) {
-  }
+  loadFromEEPROM();
+//  setupAll();
 }
+
+void loop() {}
 
 void setupAll() {
   // i2c
@@ -419,6 +418,7 @@ void receiveEvent(int howMany) {
 }
 
 void loadFromEEPROM() {
+  PRINTS("calling loadFromEEPROM()\n");
   byte initialcheck = EEPROM.read(EEPROM_I2CADDRESS);
   if (initialcheck == 255) {
     PRINTS("no init from EEPROM");
@@ -429,31 +429,53 @@ void loadFromEEPROM() {
     }
     //        return;
   } // EEPROM never writen
-
   // i2c
   i2caddress = EEPROM.read(EEPROM_I2CADDRESS); // read i2c address
+  PRINTX("Read i2c address from eeprom ",i2caddress);
+  PRINTS("\n");
   // pwm config
   for (uint8_t pwmcounter = 0; pwmcounter < 6; pwmcounter++) {
+    PRINT("Reading PWM config from eeprom for channel: ",pwmcounter);
     for (uint8_t configbyte = 0; configbyte < 6; configbyte++) {
       pwmconfig[pwmcounter][configbyte] =
           EEPROM.read(EEPROM_PWMCONFIG + pwmcounter * 6 + configbyte);
+          PRINT("\n byte ",configbyte);
+          PRINTX(" value ",pwmconfig[pwmcounter][configbyte]);
     }
+    PRINTS("\n");
+
   }
   // pinchange config
+  PRINTS("Reading PC config from eeprom: ");
   for (uint8_t pcconfigcounter = 0; pcconfigcounter < 24; pcconfigcounter++) {
     pinchangeconfig[pcconfigcounter] =
         EEPROM.read(EEPROM_PCCONFIG + pcconfigcounter);
+    PRINT("\nReading PC config from eeprom for channel: ",pcconfigcounter);
+    PRINTX(" value: ",pinchangeconfig[pcconfigcounter]);
   }
+  PRINTS("\n");
+  
   // ad config
+  PRINTS("Reading ADC config from eeprom: ");
   adconfig[0] = EEPROM.read(EEPROM_ADCONFIG);
   adconfig[1] = EEPROM.read(EEPROM_ADCONFIG + 1);
+  PRINT("\nReading ADC config from eeprom for channel: 0 value: ",adconfig[0]);
+  PRINT("\nReading ADC config from eeprom for channel: 1 value: ",adconfig[1]);
+  PRINTS("\n");
+  
   // digital i/o
+  PRINTS("Reading IO config from eeprom: ");
   for (uint8_t ioconfigcounter = 0; ioconfigcounter < 12; ioconfigcounter++) {
     ioconfig[ioconfigcounter][0] =
         EEPROM.read(EEPROM_IOCONFIG + ioconfigcounter * 2);
     ioconfig[ioconfigcounter][1] =
         EEPROM.read(EEPROM_IOCONFIG + ioconfigcounter * 2 + 1);
+    PRINT("\nReading IO config from eeprom for channel: ",ioconfigcounter);
+    PRINTX(" value[0]: ",ioconfig[ioconfigcounter][0]);
+    PRINTX(" value[1]: ",ioconfig[ioconfigcounter][1]);
   }
+  PRINTS("\n");
+
 }
 
 void setupIO() {
